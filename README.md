@@ -37,7 +37,7 @@ A production-ready wallet service with idempotency support, transaction safety, 
    DB_PORT=5432
    DB_NAME=wallet_db
    DB_USER=postgres
-   DB_PASSWORD=BongoGeorge@123
+   DB_PASSWORD=password
    REDIS_HOST=localhost
    REDIS_PORT=6379
    ```
@@ -238,7 +238,7 @@ DB_HOST=localhost
 DB_PORT=5432
 DB_NAME=wallet_db
 DB_USER=postgres
-DB_PASSWORD=BongoGeorge@123
+DB_PASSWORD=password
 DB_POOL_MAX=20
 DB_POOL_MIN=5
 DB_POOL_ACQUIRE=30000
