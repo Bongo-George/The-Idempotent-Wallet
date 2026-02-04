@@ -88,47 +88,227 @@ The server runs on `http://localhost:3000`
 
 ## API Endpoints
 
-### Health Check
+### 1. Health Check
+**Request:**
 ```
 GET /health
 ```
 
-Returns database and Redis service status.
+**Expected Response (200 OK):**
+```json
+{
+  "status": "ok",
+  "timestamp": "2026-02-04T10:30:45.123Z",
+  "services": {
+    "database": "connected",
+    "redis": "connected"
+  }
+}
+```
 
-### Transfer Money
+---
+
+### 2. Transfer Money
+**Request:**
 ```
 POST /api/transfer
 Content-Type: application/json
+```
 
+**Body:**
+```json
 {
-  "fromWalletId": "11111111-1111-1111-1111-111111111111",
+  "fromWalletId": "11111111-1111-1111-1111-111111111112",
   "toWalletId": "22222222-2222-2222-2222-222222222222",
   "amount": "100.0000",
-  "idempotencyKey": "unique-transfer-id"
+  "idempotencyKey": "transfer-001"
 }
 ```
 
-**Response:**
+**Expected Response (200 OK - First Time):**
 ```json
 {
   "success": true,
-  "transactionId": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+  "transactionId": "550e8400-e29b-41d4-a716-446655440000",
   "message": "Transfer completed successfully",
-  "fromBalance": "899.5000",
-  "toBalance": "600.5000"
+  "fromBalance": "900.0000",
+  "toBalance": "600.0000"
 }
 ```
 
-**Idempotent Response (same idempotencyKey):**
+**Expected Response (200 OK - Duplicate Request with Same idempotencyKey):**
 ```json
 {
   "success": true,
-  "transactionId": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+  "transactionId": "550e8400-e29b-41d4-a716-446655440000",
   "message": "Transfer already processed (idempotent request) (from cache)",
-  "fromBalance": "899.5000",
-  "toBalance": "600.5000"
+  "fromBalance": "900.0000",
+  "toBalance": "600.0000"
 }
 ```
+
+**Error Response - Insufficient Balance (400 Bad Request):**
+```json
+{
+  "success": false,
+  "error": {
+    "code": "INSUFFICIENT_BALANCE",
+    "message": "Insufficient balance. Available: 500.0000, Required: 1000.0000"
+  }
+}
+```
+
+**Error Response - Same Wallet Transfer (400 Bad Request):**
+```json
+{
+  "success": false,
+  "error": {
+    "code": "SAME_WALLET_TRANSFER",
+    "message": "Cannot transfer to the same wallet"
+  }
+}
+```
+
+**Error Response - Invalid Wallet ID Format (400 Bad Request):**
+```json
+{
+  "success": false,
+  "error": {
+    "code": "INVALID_WALLET_ID",
+    "message": "Invalid wallet ID format"
+  }
+}
+```
+
+**Error Response - Negative Amount (400 Bad Request):**
+```json
+{
+  "success": false,
+  "error": {
+    "code": "INVALID_AMOUNT",
+    "message": "Amount must be a positive number"
+  }
+}
+```
+
+**Error Response - Missing Fields (400 Bad Request):**
+```json
+{
+  "success": false,
+  "error": {
+    "code": "INVALID_REQUEST",
+    "message": "Missing required fields"
+  }
+}
+```
+
+**Error Response - Wallet Not Found (404 Not Found):**
+```json
+{
+  "success": false,
+  "error": {
+    "code": "WALLET_NOT_FOUND",
+    "message": "One or both wallets not found"
+  }
+}
+```
+
+---
+
+### 3. Get Wallet Balance
+**Request:**
+```
+GET /api/wallet/11111111-1111-1111-1111-111111111112/balance
+```
+
+**Expected Response (200 OK):**
+```json
+{
+  "walletId": "11111111-1111-1111-1111-111111111112",
+  "balance": "900.0000",
+  "currency": "USD"
+}
+```
+
+**Error Response - Wallet Not Found (404 Not Found):**
+```json
+{
+  "success": false,
+  "error": {
+    "code": "WALLET_NOT_FOUND",
+    "message": "Wallet not found"
+  }
+}
+```
+
+---
+
+### 4. Get Transaction History
+**Request:**
+```
+GET /api/wallet/11111111-1111-1111-1111-111111111112/transactions
+```
+
+**Expected Response (200 OK):**
+```json
+[
+  {
+    "id": "550e8400-e29b-41d4-a716-446655440000",
+    "fromWalletId": "11111111-1111-1111-1111-111111111112",
+    "toWalletId": "22222222-2222-2222-2222-222222222222",
+    "amount": "100.0000",
+    "status": "SUCCESS",
+    "idempotencyKey": "transfer-001",
+    "errorMessage": null,
+    "metadata": {
+      "requestedAt": "2026-02-04T10:30:45.123Z",
+      "completedAt": "2026-02-04T10:30:45.456Z",
+      "fromBalanceAfter": "900.0000",
+      "toBalanceAfter": "600.0000"
+    },
+    "createdAt": "2026-02-04T10:30:45.123Z",
+    "updatedAt": "2026-02-04T10:30:45.456Z"
+  },
+  {
+    "id": "660e8400-e29b-41d4-a716-446655440001",
+    "fromWalletId": "22222222-2222-2222-2222-222222222222",
+    "toWalletId": "11111111-1111-1111-1111-111111111112",
+    "amount": "50.0000",
+    "status": "SUCCESS",
+    "idempotencyKey": "transfer-002",
+    "errorMessage": null,
+    "metadata": {
+      "requestedAt": "2026-02-04T10:35:10.123Z",
+      "completedAt": "2026-02-04T10:35:10.456Z",
+      "fromBalanceAfter": "450.0000",
+      "toBalanceAfter": "950.0000"
+    },
+    "createdAt": "2026-02-04T10:35:10.123Z",
+    "updatedAt": "2026-02-04T10:35:10.456Z"
+  },
+  {
+    "id": "770e8400-e29b-41d4-a716-446655440002",
+    "fromWalletId": "11111111-1111-1111-1111-111111111112",
+    "toWalletId": "22222222-2222-2222-2222-222222222222",
+    "amount": "2000.0000",
+    "status": "FAILED",
+    "idempotencyKey": "transfer-003",
+    "errorMessage": "Insufficient balance. Available: 950.0000, Required: 2000.0000",
+    "metadata": {
+      "requestedAt": "2026-02-04T10:40:20.123Z",
+      "failedAt": "2026-02-04T10:40:20.789Z"
+    },
+    "createdAt": "2026-02-04T10:40:20.123Z",
+    "updatedAt": "2026-02-04T10:40:20.789Z"
+  }
+]
+```
+
+**Empty Response (No Transactions):**
+```json
+[]
+```
+
 
 ## Test Wallets
 

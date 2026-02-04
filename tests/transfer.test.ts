@@ -2,6 +2,7 @@ import sequelize from '../src/config/database';
 import { Wallet, TransactionLog } from '../src/models';
 import TransferService from '../src/services/TransferService';
 import { TransactionStatus, TransferError } from '../src/types';
+import RedisService from '../src/services/RedisService';
 
 describe('TransferService', () => {
   let wallet1: Wallet;
@@ -14,6 +15,9 @@ describe('TransferService', () => {
   });
 
   afterAll(async () => {
+    // Close Redis connection
+    await RedisService.disconnect();
+    // Close database connection
     await sequelize.close();
   });
 
@@ -21,6 +25,9 @@ describe('TransferService', () => {
     // Clean database
     await TransactionLog.destroy({ where: {}, force: true });
     await Wallet.destroy({ where: {}, force: true });
+    
+    // Clear Redis cache
+    await RedisService.flushAll();
 
     // Create test wallets
     wallet1 = await Wallet.create({
@@ -223,12 +230,13 @@ describe('TransferService', () => {
 
   describe('Transaction Atomicity', () => {
     it('should rollback all changes on failure', async () => {
-      // Force a failure by using invalid wallet ID partway through
+      // Force a failure by trying to transfer more than available balance
+      // This will cause the transaction to fail after PENDING log is created
       await expect(
         TransferService.executeTransfer({
           fromWalletId: wallet1.id,
-          toWalletId: '00000000-0000-0000-0000-000000000000',
-          amount: '100.0000',
+          toWalletId: wallet2.id,
+          amount: '2000.0000',  // More than wallet1's 1000.0000
           idempotencyKey: 'rollback-test',
         })
       ).rejects.toThrow();
@@ -236,6 +244,9 @@ describe('TransferService', () => {
       // Verify original balance unchanged
       const wallet1After = await Wallet.findByPk(wallet1.id);
       expect(wallet1After?.balance).toBe('1000.0000');
+
+      const wallet2After = await Wallet.findByPk(wallet2.id);
+      expect(wallet2After?.balance).toBe('500.0000');
 
       // Verify FAILED transaction log was created
       const log = await TransactionLog.findOne({

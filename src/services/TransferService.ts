@@ -79,57 +79,55 @@ class TransferService {
       );
     }
 
+    // ============================================================
+    // STEP 3: CHECK POSTGRESQL (REDIS MISS)
+    // ============================================================
+    const existingTransaction = await TransactionLog.findOne({
+      where: { idempotencyKey },
+    });
+
+    if (existingTransaction) {
+      // Found in database but not in cache
+      // Cache it for next time
+      const result = this.buildResponseFromLog(existingTransaction);
+      await RedisService.cacheResult(idempotencyKey, result);
+      return result;
+    }
+
+    // ============================================================
+    // STEP 4: VALIDATE WALLETS EXIST BEFORE CREATING LOG
+    // ============================================================
+    const fromWallet = await Wallet.findByPk(fromWalletId);
+    const toWallet = await Wallet.findByPk(toWalletId);
+
+    if (!fromWallet || !toWallet) {
+      throw new TransferError('One or both wallets not found', 404, 'WALLET_NOT_FOUND');
+    }
+
+    // ============================================================
+    // STEP 5: CREATE PENDING LOG (NOW THAT WE KNOW WALLETS EXIST)
+    // This ensures a FAILED log is created even if transaction rolls back
+    // ============================================================
+    let transactionLog = await TransactionLog.create({
+      fromWalletId,
+      toWalletId,
+      amount,
+      status: TransactionStatus.PENDING,
+      idempotencyKey,
+      metadata: {
+        requestedAt: new Date().toISOString(),
+      },
+    });
+
     try {
       // ============================================================
-      // STEP 3: CHECK POSTGRESQL (REDIS MISS)
-      // ============================================================
-      const existingTransaction = await TransactionLog.findOne({
-        where: { idempotencyKey },
-      });
-
-      if (existingTransaction) {
-        // Found in database but not in cache
-        // Cache it for next time
-        const result = this.buildResponseFromLog(existingTransaction);
-        await RedisService.cacheResult(idempotencyKey, result);
-        return result;
-      }
-
-      // ============================================================
-      // STEP 4: EXECUTE TRANSFER (NO EXISTING RECORD)
+      // STEP 5: EXECUTE TRANSFER WITHIN TRANSACTION
       // ============================================================
       const result = await sequelize.transaction(
         {
           isolationLevel: SequelizeTransaction.ISOLATION_LEVELS.READ_COMMITTED,
         },
         async (t: SequelizeTransaction) => {
-          // Create PENDING log entry
-          let transactionLog: TransactionLog;
-          try {
-            transactionLog = await TransactionLog.create(
-              {
-                fromWalletId,
-                toWalletId,
-                amount,
-                status: TransactionStatus.PENDING,
-                idempotencyKey,
-                metadata: {
-                  requestedAt: new Date().toISOString(),
-                },
-              },
-              { transaction: t }
-            );
-          } catch (error: any) {
-            if (error.name === 'SequelizeUniqueConstraintError') {
-              throw new TransferError(
-                'Duplicate request detected',
-                409,
-                'DUPLICATE_REQUEST'
-              );
-            }
-            throw error;
-          }
-
           // Lock wallet rows in consistent order
           const [firstLockId, secondLockId] =
             fromWalletId < toWalletId
@@ -187,7 +185,7 @@ class TransferService {
           );
 
           // Mark transaction SUCCESS
-          await transactionLog.update(
+          await TransactionLog.update(
             {
               status: TransactionStatus.SUCCESS,
               metadata: {
@@ -197,7 +195,10 @@ class TransferService {
                 toBalanceAfter: newToBalance,
               },
             },
-            { transaction: t }
+            {
+              where: { id: transactionLog.id },
+              transaction: t,
+            }
           );
 
           return {
@@ -209,7 +210,7 @@ class TransferService {
       );
 
       // ============================================================
-      // STEP 5: CACHE RESULT IN REDIS
+      // STEP 6: CACHE RESULT IN REDIS
       // ============================================================
       const successResponse = {
         success: true,
@@ -226,8 +227,8 @@ class TransferService {
 
       return successResponse;
     } catch (error: any) {
-      // Mark transaction failed
-      await this.markTransactionFailed(idempotencyKey, error.message);
+      // Mark transaction failed - update the PENDING log created above
+      await this.markTransactionFailed(transactionLog, error.message);
 
       if (error instanceof TransferError) {
         throw error;
@@ -240,29 +241,25 @@ class TransferService {
       );
     } finally {
       // ============================================================
-      // STEP 6: ALWAYS RELEASE LOCK
+      // STEP 7: ALWAYS RELEASE LOCK
       // ============================================================
       await RedisService.releaseLock(idempotencyKey);
     }
   }
 
   private async markTransactionFailed(
-    idempotencyKey: string,
+    transactionLog: TransactionLog,
     errorMessage: string
   ): Promise<void> {
     try {
-      await TransactionLog.update(
-        {
-          status: TransactionStatus.FAILED,
-          errorMessage,
-          metadata: sequelize.literal(
-            `metadata || '{"failedAt": "${new Date().toISOString()}"}'::jsonb`
-          ),
+      await transactionLog.update({
+        status: TransactionStatus.FAILED,
+        errorMessage,
+        metadata: {
+          ...transactionLog.metadata,
+          failedAt: new Date().toISOString(),
         },
-        {
-          where: { idempotencyKey },
-        }
-      );
+      });
     } catch (updateError) {
       console.error('Failed to mark transaction as failed:', updateError);
     }

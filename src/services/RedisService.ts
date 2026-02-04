@@ -172,6 +172,17 @@ class RedisService {
   }
 
   /**
+   * Clear all Redis keys (useful for testing)
+   */
+  async flushAll(): Promise<void> {
+    try {
+      await redisClient.flushall();
+    } catch (error) {
+      console.error('Redis flush error:', error);
+    }
+  }
+
+  /**
    * Utility: Sleep for retry logic
    */
   private sleep(ms: number): Promise<void> {
